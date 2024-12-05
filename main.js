@@ -5,7 +5,7 @@ import { RGBELoader } from "three/addons/loaders/RGBELoader.js";
 import { VRButton } from "three/addons/webxr/VRButton.js";
 import { XRControllerModelFactory } from "three/addons/webxr/XRControllerModelFactory.js";
 
-let camera, scene, renderer;
+let camera, scene, renderer, controls, dog, landscape, streaks;
 
 // Controllers
 let controller1, controller2;
@@ -17,6 +17,23 @@ let group;
 let marker, floor, baseReferenceSpace;
 let INTERSECTION;
 const tempMatrix = new THREE.Matrix4();
+
+let lastInteractionTime = Date.now();
+const resetCameraDelay = 2000; // 2 seconds
+
+const keys = {
+  w: false,
+  a: false,
+  s: false,
+  d: false,
+  ArrowUp: false,
+  ArrowDown: false,
+};
+
+let speed = 0.1;
+const minSpeed = 0.04;
+const maxSpeed = 0.2;
+const tiltAngle = 0.01;
 
 init();
 
@@ -30,275 +47,220 @@ function init() {
     0.25,
     1000
   );
-  camera.position.set(-1.8, 5, 2.7);
+  camera.position.set(0, 2, -5); // Position the camera behind the dog
+  camera.lookAt(new THREE.Vector3(0, 2, 1)); // Look towards the positive Z-axis
 
   scene = new THREE.Scene();
 
-  const xrRig = new THREE.Group(); // Create the XR rig
-  xrRig.add(camera); // Add the camera to the XR rig
-  scene.add(xrRig); // Add the XR rig to the scene
+  // Add basic lighting
+  const ambientLight = new THREE.AmbientLight(0x404040); // soft white light
+  scene.add(ambientLight);
 
-  new RGBELoader()
-    .setPath("images/")
-    .load("qwantani_dusk_2_4k.hdr", function (texture) {
-      texture.mapping = THREE.EquirectangularReflectionMapping;
+  const directionalLight = new THREE.DirectionalLight(0xffffff, 0.5);
+  directionalLight.position.set(1, 1, 1).normalize();
+  scene.add(directionalLight);
 
-      scene.background = texture;
-      scene.environment = texture;
-
-      render();
-
-      // model
-      const loader = new GLTFLoader().setPath("models/");
-      loader.load("World_poly.glb", async function (gltf) {
-        const model = gltf.scene;
-
-        // wait until the model can be added to the scene without blocking due to shader compilation
-        await renderer.compileAsync(model, camera, scene);
-
-        scene.add(model);
-
-        render();
-      });
-
-      // dog model
-      loader.load("Dog.glb", async function (gltf) {
-        const model = gltf.scene;
-
-        // wait until the model can be added to the scene without blocking due to shader compilation
-        await renderer.compileAsync(model, camera, scene);
-
-        // Move and scale the second model
-        model.position.set(4, 0.13, 0); // Move the model to (5, 0, 0)
-        model.scale.set(0.1, 0.1, 0.1); // Scale the model
-
-        scene.add(model);
-
-        render();
-      });
-    });
-
+  // Initialize renderer
   renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setPixelRatio(window.devicePixelRatio);
   renderer.setSize(window.innerWidth, window.innerHeight);
-  renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1;
-  renderer.xr.enabled = true; // Enable XR on the renderer
-  baseReferenceSpace = renderer.xr.getReferenceSpace();
+  renderer.xr.enabled = true;
   container.appendChild(renderer.domElement);
 
-  document.body.appendChild(VRButton.createButton(renderer)); // Add VRButton to the document
+  // Add OrbitControls
+  controls = new OrbitControls(camera, renderer.domElement);
+  controls.update();
 
-  // Initialize group
-  group = new THREE.Group();
-  scene.add(group);
+  // Add VRButton
+  document.body.appendChild(VRButton.createButton(renderer));
 
-  // Add a grabbable cube
-  const cubeGeometry = new THREE.BoxGeometry(0.2, 0.2, 0.2);
-  const cubeMaterial = new THREE.MeshStandardMaterial({ color: 0x00ff00 });
-  const cube = new THREE.Mesh(cubeGeometry, cubeMaterial);
-  cube.position.set(0, 1.5, -1);
-  cube.castShadow = true;
-  cube.receiveShadow = true;
-  group.add(cube);
+  // Load and set the HDR skybox
+  const rgbeLoader = new RGBELoader();
+  rgbeLoader.load("images/qwantani_dusk_2_4k.hdr", function (texture) {
+    texture.mapping = THREE.EquirectangularReflectionMapping;
+    scene.background = texture;
+    scene.environment = texture;
+  });
 
-  // Add floor for teleportation
-  floor = new THREE.Mesh(
-    new THREE.PlaneGeometry(10, 10, 2, 2).rotateX(-Math.PI / 2),
-    new THREE.MeshBasicMaterial({
-      color: 0xbcbcbc,
-      transparent: true,
-      opacity: 0.1,
-    })
-  );
-  scene.add(floor);
+  // Add Dog model
+  const gltfLoader = new GLTFLoader();
+  gltfLoader.load("models/Dog.glb", function (gltf) {
+    dog = gltf.scene;
+    dog.scale.set(0.5, 0.5, 0.5); // Adjust the scale as needed
+    dog.position.set(0, 1, 0); // Adjust the initial position as needed
+    dog.rotation.set(0, 0, 0); // Initial orientation
+    scene.add(dog);
+  });
 
-  // Add marker for teleportation
-  marker = new THREE.Mesh(
-    new THREE.CircleGeometry(0.25, 32).rotateX(-Math.PI / 2),
-    new THREE.MeshBasicMaterial({ color: 0xbcbcbc })
-  );
-  scene.add(marker);
+  // Add Landscape model
+  gltfLoader.load("models/World_poly.glb", function (gltf) {
+    landscape = gltf.scene;
+    landscape.scale.set(1, 1, 1); // Adjust the scale as needed
+    landscape.position.set(0, 0, 0); // Adjust the initial position as needed
+    scene.add(landscape);
+  });
 
-  // Controllers
+  // Controllers setup
   controller1 = renderer.xr.getController(0);
   controller1.addEventListener("selectstart", onSelectStart);
   controller1.addEventListener("selectend", onSelectEnd);
-  xrRig.add(controller1); // Add controller1 to the XR rig
+  scene.add(controller1); // Add controller1 to the scene
 
   controller2 = renderer.xr.getController(1);
   controller2.addEventListener("selectstart", onSelectStart);
   controller2.addEventListener("selectend", onSelectEnd);
-  xrRig.add(controller2); // Add controller2 to the XR rig
+  scene.add(controller2); // Add controller2 to the scene
 
   const controllerModelFactory = new XRControllerModelFactory();
 
-  controllerGrip1 = renderer.xr.getControllerGrip(0);
-  controllerGrip1.add(
-    controllerModelFactory.createControllerModel(controllerGrip1)
-  );
-  xrRig.add(controllerGrip1); // Add controllerGrip1 to the XR rig
+  // Listen for user interactions with OrbitControls
+  controls.addEventListener("start", () => {
+    lastInteractionTime = Date.now();
+  });
 
-  controllerGrip2 = renderer.xr.getControllerGrip(1);
-  controllerGrip2.add(
-    controllerModelFactory.createControllerModel(controllerGrip2)
-  );
-  xrRig.add(controllerGrip2); // Add controllerGrip2 to the XR rig
+  // Create speedometer UI
+  const speedometer = document.createElement("div");
+  speedometer.id = "speedometer";
+  speedometer.style.position = "absolute";
+  speedometer.style.bottom = "10px";
+  speedometer.style.left = "10px";
+  speedometer.style.width = "200px";
+  speedometer.style.height = "20px";
+  speedometer.style.backgroundColor = "#ccc";
+  document.body.appendChild(speedometer);
 
-  const geometry = new THREE.BufferGeometry().setFromPoints([
-    new THREE.Vector3(0, 0, 0),
-    new THREE.Vector3(0, 0, -1),
-  ]);
-  const line = new THREE.Line(geometry);
-  line.name = "line";
-  line.scale.z = 5;
+  const speedBar = document.createElement("div");
+  speedBar.id = "speedBar";
+  speedBar.style.height = "100%";
+  speedBar.style.width = `${
+    ((speed - minSpeed) / (maxSpeed - minSpeed)) * 100
+  }%`;
+  speedBar.style.backgroundColor = "#00f";
+  speedometer.appendChild(speedBar);
 
-  controller1.add(line.clone());
-  controller2.add(line.clone());
-
-  raycaster = new THREE.Raycaster();
-
-  // Camera Controls
-  const controls = new OrbitControls(camera, renderer.domElement);
-  controls.addEventListener("change", render); // use if there is no animation loop
-  controls.minDistance = 2;
-  controls.maxDistance = 10;
-  controls.target.set(0, 0, -0.2);
-  controls.update();
-
-  window.addEventListener("resize", onWindowResize);
-
-  // Start the animation loop
-  renderer.setAnimationLoop(animate);
-}
-
-function onWindowResize() {
-  camera.aspect = window.innerWidth / window.innerHeight;
-  camera.updateProjectionMatrix();
-
-  renderer.setSize(window.innerWidth, window.innerHeight);
-
-  render();
-}
-
-function onSelectStart(event) {
-  const controller = event.target;
-  controller.userData.isSelecting = true;
-
-  const intersections = getIntersections(controller);
-
-  if (intersections.length > 0) {
-    const intersection = intersections[0];
-    const object = intersection.object;
-    object.material.emissive.b = 1;
-    controller.attach(object);
-    controller.userData.selected = object;
+  // Create streaks particle effect
+  const particles = new THREE.BufferGeometry();
+  const particleCount = 5000000;
+  const positions = new Float32Array(particleCount * 3);
+  const spread = 500; // Increase this value to spread particles over a wider area
+  for (let i = 0; i < particleCount; i++) {
+    positions[i * 3] = (Math.random() - 0.5) * spread;
+    positions[i * 3 + 1] = (Math.random() - 0.5) * spread;
+    positions[i * 3 + 2] = (Math.random() - 0.5) * spread;
   }
+  particles.setAttribute("position", new THREE.BufferAttribute(positions, 3));
 
-  controller.userData.targetRayMode = event.data.targetRayMode;
-}
-
-function onSelectEnd(event) {
-  console.log("selectend event triggered");
-  const controller = event.target;
-  controller.userData.isSelecting = false;
-
-  // Handle object release
-  if (controller.userData.selected !== undefined) {
-    const object = controller.userData.selected;
-    object.material.emissive.b = 0;
-    group.attach(object);
-    controller.userData.selected = undefined;
-  }
-
-  // Handle teleportation
-  if (INTERSECTION) {
-    const xrRig = camera.parent; // Ensure the camera is parented to the XR rig
-    if (xrRig) {
-      xrRig.position.set(INTERSECTION.x, xrRig.position.y, INTERSECTION.z); // Keep the height constant
-      console.log("Teleporting to:", INTERSECTION);
-    } else {
-      console.warn("XR Rig is not defined or incorrectly set up!");
+  // Create a custom shader material for the particles
+  const particleMaterial = new THREE.ShaderMaterial({
+    uniforms: {
+      pointTexture: {
+        value: new THREE.TextureLoader().load("images/white_texture.jpg"),
+      },
+      dogPosition: { value: new THREE.Vector3() },
+      maxDistance: { value: 20.0 }, // Maximum distance for particles to be visible
+    },
+    vertexShader: `
+    uniform vec3 dogPosition;
+    uniform float maxDistance;
+    varying float vAlpha;
+    void main() {
+      float distance = length(position - dogPosition);
+      vAlpha = 1.0 - smoothstep(0.0, maxDistance, distance);
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      gl_PointSize = 1.0; // Adjust this value to make particles larger
     }
-  }
-
-  // Reset marker visibility
-  marker.visible = false;
-}
-
-function getIntersections(controller) {
-  const tempMatrix = new THREE.Matrix4()
-    .identity()
-    .extractRotation(controller.matrixWorld);
-  raycaster.ray.origin.setFromMatrixPosition(controller.matrixWorld);
-  raycaster.ray.direction.set(0, 0, -1).applyMatrix4(tempMatrix);
-
-  return raycaster.intersectObjects(group.children.concat(floor), false); // Intersect with the floor and group children
-}
-
-function intersectObjects(controller) {
-  if (controller.userData.targetRayMode === "screen") return;
-  if (controller.userData.selected !== undefined) return;
-
-  const line = controller.getObjectByName("line");
-  const intersections = getIntersections(controller);
-
-  if (intersections.length > 0) {
-    const intersection = intersections[0];
-    const object = intersection.object;
-    if (object && object.material && object.material.emissive) {
-      object.material.emissive.r = 1;
-      intersected.push(object);
-      line.scale.z = intersection.distance;
+  `,
+    fragmentShader: `
+    uniform sampler2D pointTexture;
+    varying float vAlpha;
+    void main() {
+      gl_FragColor = texture2D(pointTexture, gl_PointCoord);
+      gl_FragColor.a *= vAlpha;
     }
-  } else {
-    line.scale.z = 5;
-  }
+  `,
+    transparent: true,
+    blending: THREE.AdditiveBlending, // Ensure alpha blending is set up correctly
+    depthWrite: false, // Disable depth writing for correct transparency
+  });
+
+  streaks = new THREE.Points(particles, particleMaterial);
+  streaks.visible = false; // Initially hidden
+  scene.add(streaks);
+
+  // Animation loop
+  animate();
 }
 
-function cleanIntersected() {
-  while (intersected.length) {
-    const object = intersected.pop();
-    object.material.emissive.r = 0;
+document.addEventListener("keydown", function (event) {
+  if (!dog) return;
+  if (event.key in keys) {
+    keys[event.key] = true;
   }
+});
+
+document.addEventListener("keyup", function (event) {
+  if (event.key in keys) {
+    keys[event.key] = false;
+  }
+});
+
+function animate() {
+  renderer.setAnimationLoop(render);
 }
 
 function render() {
-  cleanIntersected();
-  intersectObjects(controller1);
-  intersectObjects(controller2);
+  if (dog) {
+    // Move the dog forward in the direction it is facing
+    dog.translateX(speed);
+
+    // Define local axes
+    const localXAxis = new THREE.Vector3(1, 0, 0);
+    const localZAxis = new THREE.Vector3(0, 0, 1);
+
+    // Update dog rotation based on key states
+    if (keys.a) dog.rotateOnAxis(localXAxis, -tiltAngle);
+    if (keys.d) dog.rotateOnAxis(localXAxis, tiltAngle);
+    if (keys.s) dog.rotateOnAxis(localZAxis, tiltAngle);
+    if (keys.w) dog.rotateOnAxis(localZAxis, -tiltAngle);
+
+    // Update speed based on arrow key states
+    if (keys.ArrowUp) speed = Math.min(speed + 0.0002, maxSpeed);
+    if (keys.ArrowDown) speed = Math.max(speed - 0.0002, minSpeed);
+
+    // Update speedometer
+    const speedBar = document.getElementById("speedBar");
+    speedBar.style.width = `${
+      ((speed - minSpeed) / (maxSpeed - minSpeed)) * 100
+    }%`;
+
+    // Show or hide streaks based on speed
+    streaks.visible = speed > 0.15;
+
+    // Update particle shader with the Dog model's position
+    streaks.material.uniforms.dogPosition.value.copy(dog.position);
+
+    // Update camera position to follow the dog
+    const relativeCameraOffset = new THREE.Vector3(-10, 3, 0);
+    const cameraOffset = relativeCameraOffset.applyMatrix4(dog.matrixWorld);
+
+    // Only reset the camera position if the user hasn't interacted for a specified duration
+    if (Date.now() - lastInteractionTime > resetCameraDelay) {
+      camera.position.lerp(cameraOffset, 0.1);
+      camera.lookAt(dog.position);
+    }
+
+    // Update OrbitControls target to the dog's position
+    controls.target.copy(dog.position);
+  }
+
+  controls.update();
   renderer.render(scene, camera);
 }
 
-function animate() {
-  INTERSECTION = undefined;
+function onSelectStart(event) {
+  // Handle select start event
+}
 
-  if (controller1.userData.isSelecting === true) {
-    tempMatrix.identity().extractRotation(controller1.matrixWorld);
-
-    raycaster.ray.origin.setFromMatrixPosition(controller1.matrixWorld);
-    raycaster.ray.direction.set(0, 0, -1).applyMatrix4(tempMatrix);
-
-    const intersects = raycaster.intersectObjects([floor]);
-
-    if (intersects.length > 0) {
-      INTERSECTION = intersects[0].point;
-    }
-  } else if (controller2.userData.isSelecting === true) {
-    tempMatrix.identity().extractRotation(controller2.matrixWorld);
-
-    raycaster.ray.origin.setFromMatrixPosition(controller2.matrixWorld);
-    raycaster.ray.direction.set(0, 0, -1).applyMatrix4(tempMatrix);
-
-    const intersects = raycaster.intersectObjects([floor]);
-
-    if (intersects.length > 0) {
-      INTERSECTION = intersects[0].point;
-    }
-  }
-
-  if (INTERSECTION) marker.position.copy(INTERSECTION);
-
-  marker.visible = INTERSECTION !== undefined;
-  render();
+function onSelectEnd(event) {
+  // Handle select end event
 }
