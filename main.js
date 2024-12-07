@@ -76,7 +76,7 @@ function init() {
 
   // Load and set the HDR skybox
   const rgbeLoader = new RGBELoader();
-  rgbeLoader.load("images/qwantani_dusk_2_4k.hdr", function (texture) {
+  rgbeLoader.load("images/kloppenheim_06_puresky_4k.hdr", function (texture) {
     texture.mapping = THREE.EquirectangularReflectionMapping;
     scene.background = texture;
     scene.environment = texture;
@@ -93,7 +93,7 @@ function init() {
   });
 
   // Add Landscape model
-  gltfLoader.load("models/World_poly.glb", function (gltf) {
+  gltfLoader.load("models/Landscape.glb", function (gltf) {
     landscape = gltf.scene;
     landscape.scale.set(1, 1, 1); // Adjust the scale as needed
     landscape.position.set(0, 0, 0); // Adjust the initial position as needed
