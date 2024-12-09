@@ -31,9 +31,10 @@ const keys = {
 };
 
 let speed = 0.1;
-const minSpeed = 0.04;
-const maxSpeed = 0.2;
+const minSpeed = 0.0;
+const maxSpeed = 0.3;
 const tiltAngle = 0.01;
+const gravity = 0.6; // Adjust this value to control the gravity effect
 
 init();
 
@@ -47,7 +48,7 @@ function init() {
     0.25,
     1000
   );
-  camera.position.set(0, 2, -5); // Position the camera behind the dog
+  camera.position.set(0, 40, -5); // Position the camera behind the dog
   camera.lookAt(new THREE.Vector3(0, 2, 1)); // Look towards the positive Z-axis
 
   scene = new THREE.Scene();
@@ -84,10 +85,10 @@ function init() {
 
   // Add Dog model
   const gltfLoader = new GLTFLoader();
-  gltfLoader.load("models/Dog.glb", function (gltf) {
+  gltfLoader.load("models/jet.glb", function (gltf) {
     dog = gltf.scene;
-    dog.scale.set(0.5, 0.5, 0.5); // Adjust the scale as needed
-    dog.position.set(0, 1, 0); // Adjust the initial position as needed
+    dog.scale.set(0.3, 0.3, 0.3); // Adjust the scale as needed
+    dog.position.set(0, 40, 0); // Adjust the initial position as needed
     dog.rotation.set(0, 0, 0); // Initial orientation
     scene.add(dog);
   });
@@ -211,21 +212,39 @@ function animate() {
 function render() {
   if (dog) {
     // Move the dog forward in the direction it is facing
-    dog.translateX(speed);
+    dog.translateX(-speed);
 
     // Define local axes
     const localXAxis = new THREE.Vector3(1, 0, 0);
     const localZAxis = new THREE.Vector3(0, 0, 1);
 
     // Update dog rotation based on key states
-    if (keys.a) dog.rotateOnAxis(localXAxis, -tiltAngle);
-    if (keys.d) dog.rotateOnAxis(localXAxis, tiltAngle);
-    if (keys.s) dog.rotateOnAxis(localZAxis, tiltAngle);
-    if (keys.w) dog.rotateOnAxis(localZAxis, -tiltAngle);
+    if (keys.d) dog.rotateOnAxis(localXAxis, -tiltAngle);
+    if (keys.a) dog.rotateOnAxis(localXAxis, tiltAngle);
+    if (keys.w) dog.rotateOnAxis(localZAxis, tiltAngle);
+    if (keys.s) dog.rotateOnAxis(localZAxis, -tiltAngle);
 
     // Update speed based on arrow key states
     if (keys.ArrowUp) speed = Math.min(speed + 0.0002, maxSpeed);
-    if (keys.ArrowDown) speed = Math.max(speed - 0.0002, minSpeed);
+    if (keys.ArrowDown) speed = Math.max(speed - 0.0001, minSpeed);
+
+    // Apply gravity effect based on speed
+    if (speed < 0.15) {
+      const gravityEffect = (0.15 - speed) * gravity;
+      dog.position.y -= gravityEffect;
+    }
+
+    /* DOESNT WORK
+    // Adjust speed based on pitch angle
+    const pitch = dog.rotation.z;
+    if (pitch > 0) {
+      // Going up
+      speed = Math.max(speed - 0.0001 * pitch, minSpeed);
+    } else if (pitch < 0) {
+      // Going down
+      speed = Math.min(speed - 0.0001 * pitch, maxSpeed);
+    }
+      */
 
     // Update speedometer
     const speedBar = document.getElementById("speedBar");
@@ -240,7 +259,7 @@ function render() {
     streaks.material.uniforms.dogPosition.value.copy(dog.position);
 
     // Update camera position to follow the dog
-    const relativeCameraOffset = new THREE.Vector3(-10, 3, 0);
+    const relativeCameraOffset = new THREE.Vector3(30, 8, 0);
     const cameraOffset = relativeCameraOffset.applyMatrix4(dog.matrixWorld);
 
     // Only reset the camera position if the user hasn't interacted for a specified duration
